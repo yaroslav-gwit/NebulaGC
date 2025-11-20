@@ -52,10 +52,11 @@ go build -o bin/nebulagc ./cmd/nebulagc
 5. Listing/inspection: `nebulagc-server list tenants|clusters|nodes --output json` (Bubble Tea tables by default).
 
 ## Cluster-Scoped REST (for admins/nodes)
-- `POST /v1/tenants/{tenant}/clusters/{cluster}/nodes` (admin of that cluster) → returns node token once.
-- `GET /v1/config/version` → latest version.
-- `GET /v1/config/bundle?current_version=X` → 304 or tar.gz with `X-Nebula-Config-Version`.
-- `POST /v1/config/bundle` (admin of that cluster) → uploads new version (cert rotation, etc.).
+- Node lifecycle: create/list/delete; rotate node/token; update MTU.
+- Routing: register routes, fetch own routes, list cluster routes.
+- Topology: set lighthouse/relay flags; list cluster topology (includes control-plane lighthouses).
+- Config distribution: get latest version; download/upload bundles with version headers.
+- Cluster token rotation for compromise recovery.
 - `GET /v1/healthz` → liveness.
 
 ## Config Bundle Contract
@@ -69,3 +70,4 @@ go build -o bin/nebulagc ./cmd/nebulagc
 ## Notes
 - REST cannot list tenants/clusters; only cluster-local operations are exposed to keep it anon-friendly.
 - Admin Unix socket is disabled by default; enable with `--admin-socket` or env var (e.g. `NEBULAGC_ADMIN_SOCKET_PATH`).
+- Only the master instance accepts mutating commands (REST writes, CLI, or admin socket); replicas return read-only errors with `REPLICA_READ_ONLY`.
