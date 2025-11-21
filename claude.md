@@ -9,9 +9,11 @@
    - [AgentDocs/constitution.md](AgentDocs/constitution.md) - Project constitution and coding standards
    - [AgentDocs/ToDo/nebula_control_plane_spec.md](AgentDocs/ToDo/nebula_control_plane_spec.md) - Complete technical specification
 
-2. **Review Current Work State**:
+2. **Review Planning and Current Work State**:
+   - Check `AgentDocs/Planning/` for task breakdowns and roadmap
    - Check `AgentDocs/InProgress/` for active tasks
    - Check `AgentDocs/Done/` for completed work (identify highest task number)
+   - Check `AgentDocs/ToDo/` for specific tasks ready to start
    - Determine next sequential task number for new work
 
 3. **Understand Task Numbering System**:
@@ -49,9 +51,15 @@
 NebulaGC/
 ├── AgentDocs/                               # Development workflow tracking
 │   ├── constitution.md                      # Project coding standards (READ FIRST!)
+│   ├── Planning/                            # Planning documents and task breakdowns
+│   │   ├── phase1_task_breakdown.md        # Phase 1: Tasks 00001-00011
+│   │   ├── phase2_task_breakdown.md        # Phase 2: Tasks 00012-00022
+│   │   ├── phase3_task_breakdown.md        # Phase 3: Tasks 00023-00032
+│   │   ├── implementation_roadmap.md       # High-level roadmap and critical path
+│   │   └── quick_start_guide.md            # Quick reference for new developers
 │   ├── Done/                                # Completed tasks (numbered: 00001_*.md)
 │   ├── InProgress/                          # Current work (numbered: 00001_*.md)
-│   └── ToDo/                                # Planned tasks (unnumbered specs)
+│   └── ToDo/                                # Specific tasks ready to start
 │       └── nebula_control_plane_spec.md    # Complete technical specification
 ├── README.md                                # Project overview and quick start
 └── claude.md                                # This file (AI agent guide)
@@ -159,6 +167,17 @@ Client library providing:
 - Automatic process restart on config changes
 - HTTP caching with 304 Not Modified responses
 
+## Implementation Plan
+
+The project is broken down into **32 discrete tasks** across 3 phases. See [AgentDocs/Planning/](AgentDocs/Planning/) for detailed breakdowns:
+
+- **[Phase 1 (Tasks 00001-00011)](AgentDocs/Planning/phase1_task_breakdown.md)**: HA Control Plane Core (~2 weeks)
+- **[Phase 2 (Tasks 00012-00022)](AgentDocs/Planning/phase2_task_breakdown.md)**: SDK and Daemon (~1 week)
+- **[Phase 3 (Tasks 00023-00032)](AgentDocs/Planning/phase3_task_breakdown.md)**: Production Hardening (~1 week)
+
+For a high-level overview, see [implementation_roadmap.md](AgentDocs/Planning/implementation_roadmap.md).
+For quick reference, see [quick_start_guide.md](AgentDocs/Planning/quick_start_guide.md).
+
 ## Development Workflow
 
 ### Prerequisites
@@ -217,19 +236,28 @@ go build -o bin/nebulagc ./cmd/nebulagc
 
 ## Key Documentation Files
 
-### [README.md](README.md)
-Project overview, features, and quick start guide
+### Planning Documents
 
-### [AgentDocs/ToDo/nebula_control_plane_spec.md](AgentDocs/ToDo/nebula_control_plane_spec.md)
-Comprehensive technical specification (1,386 lines) containing:
-- Complete REST API specification (30+ endpoints)
-- Database schema definitions
-- Authentication flows
-- High availability architecture
-- Token security requirements
-- Client SDK specification
-- Daemon design
-- Development workflow
+- **[implementation_roadmap.md](AgentDocs/Planning/implementation_roadmap.md)**: High-level roadmap, critical path, parallelization opportunities
+- **[quick_start_guide.md](AgentDocs/Planning/quick_start_guide.md)**: Quick reference for new developers/agents
+- **[phase1_task_breakdown.md](AgentDocs/Planning/phase1_task_breakdown.md)**: Detailed breakdown of Phase 1 (Tasks 00001-00011)
+- **[phase2_task_breakdown.md](AgentDocs/Planning/phase2_task_breakdown.md)**: Detailed breakdown of Phase 2 (Tasks 00012-00022)
+- **[phase3_task_breakdown.md](AgentDocs/Planning/phase3_task_breakdown.md)**: Detailed breakdown of Phase 3 (Tasks 00023-00032)
+
+### Technical Specification
+
+- **[nebula_control_plane_spec.md](AgentDocs/ToDo/nebula_control_plane_spec.md)**: Complete technical specification (1,386 lines)
+  - Complete REST API specification (30+ endpoints)
+  - Database schema definitions
+  - Authentication flows
+  - High availability architecture
+  - Token security requirements
+  - Client SDK specification
+  - Daemon design
+
+### Overview
+
+- **[README.md](README.md)**: Project overview, features, and quick start guide
 
 ## Working with This Project
 
