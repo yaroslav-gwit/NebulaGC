@@ -7,8 +7,18 @@ import (
 	"time"
 
 	"go.uber.org/zap"
-	"nebulagc.io/server/internal/service"
 )
+
+// ReplicaRegistry defines the minimal operations needed by the HA manager.
+type ReplicaRegistry interface {
+	Register(instanceID, address string, mode Mode) error
+	ValidateSingleMaster() error
+	SendHeartbeat(instanceID string) error
+	PruneStale(threshold time.Duration, multiplier int) (int, error)
+	GetMaster(threshold time.Duration, currentInstanceID string) (*MasterInfo, error)
+	ListReplicas(threshold time.Duration, currentInstanceID string) ([]*ReplicaInfo, error)
+	Unregister(instanceID string) error
+}
 
 // Manager manages high availability operations for a control plane instance.
 //
@@ -19,7 +29,7 @@ import (
 // - Graceful shutdown and cleanup
 type Manager struct {
 	config  *Config
-	service *service.ReplicaService
+	service ReplicaRegistry
 	logger  *zap.Logger
 
 	ctx    context.Context
@@ -39,7 +49,7 @@ type Manager struct {
 //
 // Returns:
 //   - Configured Manager
-func NewManager(config *Config, service *service.ReplicaService, logger *zap.Logger) *Manager {
+func NewManager(config *Config, service ReplicaRegistry, logger *zap.Logger) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Manager{
@@ -62,14 +72,37 @@ func NewManager(config *Config, service *service.ReplicaService, logger *zap.Log
 // Returns:
 //   - error: Any error that occurred during startup
 func (m *Manager) Start() error {
+	if !ValidateMode(m.config.Mode) {
+		return fmt.Errorf("invalid HA mode: %s", m.config.Mode)
+	}
+
+	if m.config.HeartbeatInterval == 0 {
+		m.config.HeartbeatInterval = DefaultHeartbeatInterval
+	}
+
+	if m.config.HeartbeatThreshold == 0 {
+		m.config.HeartbeatThreshold = DefaultHeartbeatThreshold
+	}
+
+	if m.config.PruneInterval == 0 {
+		m.config.PruneInterval = DefaultPruneInterval
+	}
+
 	// Register this instance
-	if err := m.service.Register(m.config.InstanceID, m.config.URL); err != nil {
+	if err := m.service.Register(m.config.InstanceID, m.config.Address, m.config.Mode); err != nil {
 		return fmt.Errorf("failed to register replica: %w", err)
+	}
+
+	if m.config.Mode == ModeMaster {
+		if err := m.service.ValidateSingleMaster(); err != nil {
+			return fmt.Errorf("master validation failed: %w", err)
+		}
 	}
 
 	m.logger.Info("HA manager started",
 		zap.String("instance_id", m.config.InstanceID),
-		zap.String("url", m.config.URL),
+		zap.String("address", m.config.Address),
+		zap.String("mode", string(m.config.Mode)),
 		zap.Duration("heartbeat_interval", m.config.HeartbeatInterval),
 		zap.Bool("pruning_enabled", m.config.EnablePruning),
 	)
@@ -128,7 +161,7 @@ func (m *Manager) GetMaster() (*MasterInfo, error) {
 //
 // Returns:
 //   - bool: true if this instance is the master
-//   - string: URL of the master (empty if we are master)
+//   - string: Address of the master (empty if we are master)
 //   - error: Any error that occurred
 func (m *Manager) IsMaster() (bool, string, error) {
 	master, err := m.GetMaster()
@@ -140,7 +173,7 @@ func (m *Manager) IsMaster() (bool, string, error) {
 		return true, "", nil
 	}
 
-	return false, master.URL, nil
+	return false, master.Address, nil
 }
 
 // ListReplicas returns all healthy replicas.

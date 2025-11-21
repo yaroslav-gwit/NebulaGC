@@ -7,6 +7,7 @@ import (
 	"go.uber.org/zap"
 	"nebulagc.io/server/internal/api/handlers"
 	"nebulagc.io/server/internal/api/middleware"
+	"nebulagc.io/server/internal/ha"
 )
 
 // RouterConfig holds configuration for setting up the HTTP router.
@@ -29,6 +30,9 @@ type RouterConfig struct {
 
 	// DisableWriteGuard disables the replica write guard (for single-instance deployments).
 	DisableWriteGuard bool
+
+	// HAManager provides master detection for write-guard and health endpoints.
+	HAManager *ha.Manager
 }
 
 // SetupRouter creates and configures the Gin HTTP router with all routes and middleware.
@@ -66,13 +70,8 @@ func SetupRouter(config *RouterConfig) *gin.Engine {
 	router.Use(middleware.RateLimitByIP(100.0, 200)) // 100 req/s per IP
 
 	// Replica write guard (if enabled)
-	var replicaConfig *middleware.ReplicaConfig
-	if !config.DisableWriteGuard {
-		replicaConfig = &middleware.ReplicaConfig{
-			DB:         config.DB,
-			InstanceID: config.InstanceID,
-		}
-		router.Use(middleware.WriteGuard(replicaConfig))
+	if !config.DisableWriteGuard && config.HAManager != nil {
+		router.Use(middleware.WriteGuard(config.HAManager.IsMaster))
 	}
 
 	// Authentication config for middleware
@@ -85,13 +84,7 @@ func SetupRouter(config *RouterConfig) *gin.Engine {
 	healthHandler := handlers.NewHealthHandler(
 		config.DB,
 		config.InstanceID,
-		func() (bool, string, error) {
-			if replicaConfig != nil {
-				return replicaConfig.IsMaster()
-			}
-			// Single instance mode - always master
-			return true, "", nil
-		},
+		selectMasterChecker(config),
 	)
 
 	// Health check routes (no authentication required)
@@ -198,4 +191,16 @@ func SetupRouter(config *RouterConfig) *gin.Engine {
 	// }
 
 	return router
+}
+
+// selectMasterChecker returns the appropriate master-check function.
+// Defaults to always-master in single-instance mode.
+func selectMasterChecker(config *RouterConfig) func() (bool, string, error) {
+	if config.HAManager != nil {
+		return config.HAManager.IsMaster
+	}
+
+	return func() (bool, string, error) {
+		return true, "", nil
+	}
 }

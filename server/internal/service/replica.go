@@ -42,14 +42,19 @@ func NewReplicaService(db *sql.DB, logger *zap.Logger) *ReplicaService {
 //
 // Parameters:
 //   - instanceID: This instance's UUID
-//   - url: This instance's public URL
+//   - address: This instance's public address
+//   - mode: The runtime mode (master or replica)
 //
 // Returns:
 //   - error: Any error that occurred during registration
-func (s *ReplicaService) Register(instanceID, url string) error {
+func (s *ReplicaService) Register(instanceID, address string, mode ha.Mode) error {
+	if !ha.ValidateMode(mode) {
+		return fmt.Errorf("invalid mode %q: must be master or replica", mode)
+	}
+
 	// Check if replica already exists
 	var existingID string
-	checkQuery := `SELECT instance_id FROM replicas WHERE instance_id = ?`
+	checkQuery := `SELECT id FROM replicas WHERE id = ?`
 	err := s.db.QueryRow(checkQuery, instanceID).Scan(&existingID)
 
 	now := time.Now()
@@ -57,17 +62,18 @@ func (s *ReplicaService) Register(instanceID, url string) error {
 	if err == sql.ErrNoRows {
 		// New replica - insert
 		insertQuery := `
-			INSERT INTO replicas (instance_id, url, last_heartbeat, created_at)
-			VALUES (?, ?, ?, ?)
+			INSERT INTO replicas (id, address, role, last_seen_at, created_at)
+			VALUES (?, ?, ?, ?, ?)
 		`
-		_, err = s.db.Exec(insertQuery, instanceID, url, now, now)
+		_, err = s.db.Exec(insertQuery, instanceID, address, string(mode), now, now)
 		if err != nil {
 			return fmt.Errorf("failed to register replica: %w", err)
 		}
 
 		s.logger.Info("registered new replica",
 			zap.String("instance_id", instanceID),
-			zap.String("url", url),
+			zap.String("address", address),
+			zap.String("role", string(mode)),
 		)
 	} else if err != nil {
 		return fmt.Errorf("failed to check replica existence: %w", err)
@@ -75,17 +81,18 @@ func (s *ReplicaService) Register(instanceID, url string) error {
 		// Existing replica - update (restart scenario)
 		updateQuery := `
 			UPDATE replicas
-			SET url = ?, last_heartbeat = ?
-			WHERE instance_id = ?
+			SET address = ?, role = ?, last_seen_at = ?
+			WHERE id = ?
 		`
-		_, err = s.db.Exec(updateQuery, url, now, instanceID)
+		_, err = s.db.Exec(updateQuery, address, string(mode), now, instanceID)
 		if err != nil {
 			return fmt.Errorf("failed to update replica: %w", err)
 		}
 
 		s.logger.Info("updated existing replica",
 			zap.String("instance_id", instanceID),
-			zap.String("url", url),
+			zap.String("address", address),
+			zap.String("role", string(mode)),
 		)
 	}
 
@@ -105,8 +112,8 @@ func (s *ReplicaService) Register(instanceID, url string) error {
 func (s *ReplicaService) SendHeartbeat(instanceID string) error {
 	query := `
 		UPDATE replicas
-		SET last_heartbeat = ?
-		WHERE instance_id = ?
+		SET last_seen_at = ?
+		WHERE id = ?
 	`
 
 	result, err := s.db.Exec(query, time.Now(), instanceID)
@@ -120,7 +127,7 @@ func (s *ReplicaService) SendHeartbeat(instanceID string) error {
 	}
 
 	if rows == 0 {
-		return fmt.Errorf("replica not found: %s", instanceID)
+		return fmt.Errorf("replica not found for heartbeat: %s", instanceID)
 	}
 
 	s.logger.Debug("sent heartbeat", zap.String("instance_id", instanceID))
@@ -143,15 +150,16 @@ func (s *ReplicaService) GetMaster(threshold time.Duration, currentInstanceID st
 	cutoff := time.Now().Add(-threshold)
 
 	query := `
-		SELECT instance_id, url
+		SELECT id, address, role
 		FROM replicas
-		WHERE last_heartbeat > ?
+		WHERE last_seen_at > ?
 		ORDER BY created_at ASC
 		LIMIT 1
 	`
 
-	var masterID, masterURL string
-	err := s.db.QueryRow(query, cutoff).Scan(&masterID, &masterURL)
+	var masterID, masterAddress string
+	var masterRole string
+	err := s.db.QueryRow(query, cutoff).Scan(&masterID, &masterAddress, &masterRole)
 
 	if err == sql.ErrNoRows {
 		// No healthy replicas found - this shouldn't happen but we'll
@@ -161,16 +169,23 @@ func (s *ReplicaService) GetMaster(threshold time.Duration, currentInstanceID st
 		)
 		return &ha.MasterInfo{
 			InstanceID: currentInstanceID,
-			URL:        "",
+			Address:    "",
 			IsSelf:     true,
 		}, nil
 	} else if err != nil {
 		return nil, fmt.Errorf("failed to query master: %w", err)
 	}
 
+	if !ha.ValidateMode(ha.Mode(masterRole)) {
+		s.logger.Warn("master record has invalid role, treating as replica",
+			zap.String("instance_id", masterID),
+			zap.String("role", masterRole),
+		)
+	}
+
 	return &ha.MasterInfo{
 		InstanceID: masterID,
-		URL:        masterURL,
+		Address:    masterAddress,
 		IsSelf:     masterID == currentInstanceID,
 	}, nil
 }
@@ -188,9 +203,9 @@ func (s *ReplicaService) ListReplicas(threshold time.Duration, currentInstanceID
 	cutoff := time.Now().Add(-threshold)
 
 	query := `
-		SELECT instance_id, url, last_heartbeat, created_at
+		SELECT id, address, role, last_seen_at, created_at
 		FROM replicas
-		WHERE last_heartbeat > ?
+		WHERE last_seen_at > ?
 		ORDER BY created_at ASC
 	`
 
@@ -205,9 +220,16 @@ func (s *ReplicaService) ListReplicas(threshold time.Duration, currentInstanceID
 
 	for rows.Next() {
 		var r ha.ReplicaInfo
-		err := rows.Scan(&r.InstanceID, &r.URL, &r.LastHeartbeat, &r.CreatedAt)
+		var role string
+		err := rows.Scan(&r.InstanceID, &r.Address, &role, &r.LastHeartbeat, &r.CreatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan replica: %w", err)
+		}
+
+		if ha.ValidateMode(ha.Mode(role)) {
+			r.Role = ha.Mode(role)
+		} else {
+			r.Role = ha.ModeReplica
 		}
 
 		// First replica in list is the master (ordered by created_at ASC)
@@ -242,7 +264,7 @@ func (s *ReplicaService) PruneStale(threshold time.Duration, multiplier int) (in
 
 	query := `
 		DELETE FROM replicas
-		WHERE last_heartbeat < ?
+		WHERE last_seen_at < ?
 	`
 
 	result, err := s.db.Exec(query, cutoff)
@@ -276,7 +298,7 @@ func (s *ReplicaService) PruneStale(threshold time.Duration, multiplier int) (in
 // Returns:
 //   - error: Any error that occurred during unregistration
 func (s *ReplicaService) Unregister(instanceID string) error {
-	query := `DELETE FROM replicas WHERE instance_id = ?`
+	query := `DELETE FROM replicas WHERE id = ?`
 
 	result, err := s.db.Exec(query, instanceID)
 	if err != nil {
@@ -290,6 +312,27 @@ func (s *ReplicaService) Unregister(instanceID string) error {
 
 	if rows > 0 {
 		s.logger.Info("unregistered replica", zap.String("instance_id", instanceID))
+	}
+
+	return nil
+}
+
+// ValidateSingleMaster ensures there is at most one master entry.
+//
+// This should be called on master startup to avoid split-brain scenarios.
+//
+// Returns:
+//   - error: If multiple masters are registered or the query fails
+func (s *ReplicaService) ValidateSingleMaster() error {
+	const query = `SELECT COUNT(*) FROM replicas WHERE role = 'master'`
+
+	var count int
+	if err := s.db.QueryRow(query).Scan(&count); err != nil {
+		return fmt.Errorf("failed to count masters: %w", err)
+	}
+
+	if count > 1 {
+		return fmt.Errorf("detected %d masters in registry", count)
 	}
 
 	return nil

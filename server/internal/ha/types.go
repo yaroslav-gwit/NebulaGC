@@ -30,8 +30,11 @@ type Config struct {
 	// InstanceID is this control plane instance's UUID.
 	InstanceID string
 
-	// URL is the public URL of this instance (e.g., "https://cp1.example.com:8080").
-	URL string
+	// Address is the public address of this instance (e.g., "https://cp1.example.com:8080").
+	Address string
+
+	// Mode indicates whether this instance is running as master or replica.
+	Mode Mode
 
 	// HeartbeatInterval is how often to send heartbeats.
 	HeartbeatInterval time.Duration
@@ -48,10 +51,11 @@ type Config struct {
 }
 
 // DefaultConfig returns a Config with default values.
-func DefaultConfig(instanceID, url string) *Config {
+func DefaultConfig(instanceID, address string, mode Mode) *Config {
 	return &Config{
 		InstanceID:         instanceID,
-		URL:                url,
+		Address:            address,
+		Mode:               mode,
 		HeartbeatInterval:  DefaultHeartbeatInterval,
 		HeartbeatThreshold: DefaultHeartbeatThreshold,
 		PruneInterval:      DefaultPruneInterval,
@@ -64,8 +68,11 @@ type ReplicaInfo struct {
 	// InstanceID is the replica's UUID.
 	InstanceID string
 
-	// URL is the replica's public URL.
-	URL string
+	// Address is the replica's public address.
+	Address string
+
+	// Role is the replica's configured role (master or replica).
+	Role Mode
 
 	// IsMaster indicates if this replica is currently the master.
 	IsMaster bool
@@ -82,8 +89,8 @@ type MasterInfo struct {
 	// InstanceID is the master's UUID.
 	InstanceID string
 
-	// URL is the master's public URL.
-	URL string
+	// Address is the master's public address.
+	Address string
 
 	// IsSelf indicates if this instance is the master.
 	IsSelf bool

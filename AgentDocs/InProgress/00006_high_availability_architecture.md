@@ -74,12 +74,12 @@ On server startup:
 
 ## Progress
 
-- [ ] Create HA types and constants
-- [ ] Implement replica service
-- [ ] Implement HA manager with heartbeat
-- [ ] Add replica registration to server startup
-- [ ] Add graceful shutdown handling
-- [ ] Integrate with replica middleware
+- [x] Create HA types and constants
+- [x] Implement replica service
+- [x] Implement HA manager with heartbeat
+- [x] Add replica registration to server startup
+- [x] Add graceful shutdown handling
+- [x] Integrate with replica middleware
 - [ ] Write unit tests
 - [ ] Update task documentation
 
