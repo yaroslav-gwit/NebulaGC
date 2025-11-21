@@ -1,0 +1,54 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.html
+coverage.txt
+
+# Go workspace file
+go.work.sum
+
+# Dependency directories
+vendor/
+
+# Development and temporary files
+tmp/
+dev_config.json
+*.db
+*.db-shm
+*.db-wal
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.local
+
+# Logs
+*.log
+
+# Build artifacts
+dist/
+
+# SQLc generated files (we'll regenerate them)
+server/internal/db/models.go
+server/internal/db/querier.go
+server/internal/db/*.sql.go
