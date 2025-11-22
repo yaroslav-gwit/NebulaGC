@@ -4,10 +4,13 @@ import (
 	"database/sql"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 	"nebulagc.io/server/internal/api/handlers"
 	"nebulagc.io/server/internal/api/middleware"
 	"nebulagc.io/server/internal/ha"
+	"nebulagc.io/server/internal/metrics"
+	"nebulagc.io/server/internal/service"
 )
 
 // RouterConfig holds configuration for setting up the HTTP router.
@@ -58,6 +61,9 @@ func SetupRouter(config *RouterConfig) *gin.Engine {
 	// Recovery middleware (recover from panics)
 	router.Use(gin.Recovery())
 
+	// Metrics middleware (should be early to capture all requests)
+	router.Use(middleware.MetricsMiddleware())
+
 	// Request logging middleware
 	router.Use(middleware.RequestLogger(config.Logger))
 
@@ -80,12 +86,28 @@ func SetupRouter(config *RouterConfig) *gin.Engine {
 		Secret: config.HMACSecret,
 	}
 
+	// Services
+	nodeService := service.NewNodeService(config.DB, config.Logger, config.HMACSecret)
+	nodeHandler := handlers.NewNodeHandler(nodeService)
+
+	bundleService := service.NewBundleService(config.DB, config.Logger)
+	bundleHandler := handlers.NewBundleHandler(bundleService)
+
+	topologyService := service.NewTopologyService(config.DB, config.Logger, config.HMACSecret)
+	topologyHandler := handlers.NewTopologyHandler(topologyService)
+
 	// Health check handler
 	healthHandler := handlers.NewHealthHandler(
 		config.DB,
 		config.InstanceID,
 		selectMasterChecker(config),
 	)
+
+	// Metrics endpoint (no authentication required)
+	router.GET("/metrics", gin.WrapH(promhttp.HandlerFor(
+		metrics.Registry,
+		promhttp.HandlerOpts{},
+	)))
 
 	// Health check routes (no authentication required)
 	health := router.Group("/health")
@@ -99,96 +121,85 @@ func SetupRouter(config *RouterConfig) *gin.Engine {
 	v1 := router.Group("/api/v1")
 
 	// Node management endpoints (requires node token authentication)
-	// These will be implemented in Task 00007
 	nodes := v1.Group("/nodes")
 	nodes.Use(middleware.RequireNodeToken(authConfig))
 	nodes.Use(middleware.RateLimitByNode(50.0, 100)) // 50 req/s per node
 	{
 		// POST /api/v1/nodes - Create new node (requires admin node)
-		// nodes.POST("", middleware.RequireAdminNode(), nodeHandler.CreateNode)
+		nodes.POST("", middleware.RequireAdminNode(), nodeHandler.CreateNode)
 
-		// GET /api/v1/nodes - List nodes in cluster
-		// nodes.GET("", nodeHandler.ListNodes)
+		// GET /api/v1/nodes - List nodes in cluster (requires admin node)
+		nodes.GET("", middleware.RequireAdminNode(), nodeHandler.ListNodes)
 
-		// GET /api/v1/nodes/:id - Get node details
-		// nodes.GET("/:id", nodeHandler.GetNode)
+		// PATCH /api/v1/nodes/:id/mtu - Update MTU (requires admin node)
+		nodes.PATCH("/:id/mtu", middleware.RequireAdminNode(), nodeHandler.UpdateMTU)
+
+		// POST /api/v1/nodes/:id/token - Rotate node token (requires admin node)
+		nodes.POST("/:id/token", middleware.RequireAdminNode(), nodeHandler.RotateNodeToken)
 
 		// DELETE /api/v1/nodes/:id - Delete node (requires admin node)
-		// nodes.DELETE("/:id", middleware.RequireAdminNode(), nodeHandler.DeleteNode)
-
-		// POST /api/v1/nodes/:id/token/rotate - Rotate node token
-		// nodes.POST("/:id/token/rotate", nodeHandler.RotateNodeToken)
+		nodes.DELETE("/:id", middleware.RequireAdminNode(), nodeHandler.DeleteNode)
 	}
 
 	// Config distribution endpoints (requires node token authentication)
-	// These will be implemented in Task 00008
 	config_endpoints := v1.Group("/config")
 	config_endpoints.Use(middleware.RequireNodeToken(authConfig))
 	config_endpoints.Use(middleware.RateLimitByNode(10.0, 20)) // Lower limit for config downloads
 	{
 		// GET /api/v1/config/version - Check current config version
-		// config_endpoints.GET("/version", configHandler.GetVersion)
+		config_endpoints.GET("/version", bundleHandler.GetVersion)
 
 		// GET /api/v1/config/bundle - Download config bundle
-		// config_endpoints.GET("/bundle", configHandler.DownloadBundle)
+		config_endpoints.GET("/bundle", bundleHandler.DownloadBundle)
 
 		// POST /api/v1/config/bundle - Upload config bundle (requires admin node)
-		// config_endpoints.POST("/bundle", middleware.RequireAdminNode(), configHandler.UploadBundle)
+		config_endpoints.POST("/bundle", middleware.RequireAdminNode(), bundleHandler.UploadBundle)
 	}
 
 	// Topology management endpoints (requires cluster token authentication)
-	// These will be implemented in Task 00009
 	topology := v1.Group("/topology")
 	topology.Use(middleware.RequireClusterToken(authConfig))
 	topology.Use(middleware.RateLimitByCluster(100.0, 200)) // 100 req/s per cluster
 	{
 		// GET /api/v1/topology - Get cluster topology
-		// topology.GET("", topologyHandler.GetTopology)
+		topology.GET("", topologyHandler.GetTopology)
 
 		// POST /api/v1/topology/lighthouse - Assign lighthouse
-		// topology.POST("/lighthouse", topologyHandler.AssignLighthouse)
+		topology.POST("/lighthouse", topologyHandler.AssignLighthouse)
 
 		// DELETE /api/v1/topology/lighthouse/:node_id - Unassign lighthouse
-		// topology.DELETE("/lighthouse/:node_id", topologyHandler.UnassignLighthouse)
+		topology.DELETE("/lighthouse/:node_id", topologyHandler.UnassignLighthouse)
 
 		// POST /api/v1/topology/relay - Assign relay
-		// topology.POST("/relay", topologyHandler.AssignRelay)
+		topology.POST("/relay", topologyHandler.AssignRelay)
 
 		// DELETE /api/v1/topology/relay/:node_id - Unassign relay
-		// topology.DELETE("/relay/:node_id", topologyHandler.UnassignRelay)
+		topology.DELETE("/relay/:node_id", topologyHandler.UnassignRelay)
 	}
 
 	// Route management endpoints (requires node token authentication)
-	// These will be implemented in Task 00009
 	routes := v1.Group("/routes")
 	routes.Use(middleware.RequireNodeToken(authConfig))
 	routes.Use(middleware.RateLimitByNode(20.0, 40)) // 20 req/s per node for route updates
 	{
 		// GET /api/v1/routes - Get node's advertised routes
-		// routes.GET("", routeHandler.GetRoutes)
+		routes.GET("", topologyHandler.GetRoutes)
 
 		// PUT /api/v1/routes - Update node's advertised routes
-		// routes.PUT("", routeHandler.UpdateRoutes)
+		routes.PUT("", topologyHandler.UpdateRoutes)
 
 		// GET /api/v1/routes/cluster - Get all routes in cluster
-		// routes.GET("/cluster", routeHandler.GetClusterRoutes)
+		routes.GET("/cluster", topologyHandler.GetClusterRoutes)
 	}
 
 	// Token rotation endpoints
-	// These will be implemented in Task 00009
-	// tokens := v1.Group("/tokens")
-	// {
-	// 	POST /api/v1/tokens/cluster/rotate - Rotate cluster token (requires cluster token)
-	// 	tokens.POST("/cluster/rotate",
-	// 	  middleware.RequireClusterToken(authConfig),
-	// 	  tokenHandler.RotateClusterToken)
-	//
-	// 	POST /api/v1/tokens/node/:id/rotate - Rotate specific node token (requires admin node)
-	// 	tokens.POST("/node/:id/rotate",
-	// 	  middleware.RequireNodeToken(authConfig),
-	// 	  middleware.RequireAdminNode(),
-	// 	  tokenHandler.RotateNodeToken)
-	// }
+	tokens := v1.Group("/tokens")
+	{
+		// POST /api/v1/tokens/cluster/rotate - Rotate cluster token (requires cluster token)
+		tokens.POST("/cluster/rotate",
+			middleware.RequireClusterToken(authConfig),
+			topologyHandler.RotateClusterToken)
+	}
 
 	return router
 }

@@ -1,0 +1,172 @@
+# golangci-lint configuration
+# https://golangci-lint.run/usage/configuration/
+
+run:
+  timeout: 5m
+  issues-exit-code: 1
+  tests: true
+  modules-download-mode: readonly
+
+output:
+  format: colored-line-number
+  print-issued-lines: true
+  print-linter-name: true
+  uniq-by-line: true
+  sort-results: true
+
+linters:
+  disable-all: true
+  enable:
+    # Default linters
+    - errcheck       # Check for unchecked errors
+    - gosimple       # Simplify code
+    - govet          # Go vet
+    - ineffassign    # Detect ineffectual assignments
+    - staticcheck    # Staticcheck analysis
+    - typecheck      # Type checking
+    - unused         # Unused code
+    
+    # Additional recommended linters
+    - gofmt          # Check gofmt formatting
+    - goimports      # Check goimports formatting
+    - misspell       # Check for misspelled words
+    - revive         # Fast linter
+    - gosec          # Security issues
+    - gocritic       # Opinionated linter
+    - gocyclo        # Cyclomatic complexity
+    - dupl           # Code duplication
+    - goconst        # Repeated strings that could be constants
+    - unconvert      # Unnecessary type conversions
+    - unparam        # Unused function parameters
+    - prealloc       # Preallocate slices
+    - predeclared    # Find redeclared predeclared identifiers
+    - nolintlint     # Reports ill-formed nolint comments
+    - exportloopref  # Checks for pointers to enclosing loop variables
+    - errname        # Check error names
+    - errorlint      # Find code that will cause problems with error wrapping
+    - whitespace     # Tool for detection of leading and trailing whitespace
+    - wastedassign   # Find wasted assignment statements
+    
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+    exclude-functions:
+      - io/ioutil.ReadFile
+      - io.Copy(*bytes.Buffer)
+      - io.Copy(os.Stdout)
+  
+  govet:
+    check-shadowing: true
+    enable-all: true
+  
+  gocyclo:
+    min-complexity: 15
+  
+  goconst:
+    min-len: 3
+    min-occurrences: 3
+  
+  dupl:
+    threshold: 100
+  
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - style
+      - performance
+      - experimental
+      - opinionated
+    disabled-checks:
+      - ifElseChain
+      - singleCaseSwitch
+      - whyNoLint
+      - unnamedResult
+  
+  gosec:
+    excludes:
+      - G104  # Audit errors not checked (covered by errcheck)
+      - G307  # Deferring unsafe method (false positives with Close)
+    severity: medium
+    confidence: medium
+  
+  revive:
+    rules:
+      - name: exported
+        arguments:
+          - "checkPrivateReceivers"
+          - "sayRepetitiveInsteadOfStutters"
+      - name: package-comments
+      - name: indent-error-flow
+      - name: var-naming
+      - name: error-return
+      - name: error-strings
+      - name: error-naming
+      - name: if-return
+      - name: var-declaration
+      - name: range
+      - name: receiver-naming
+      - name: time-naming
+      - name: context-as-argument
+      - name: context-keys-type
+  
+  staticcheck:
+    checks: ["all"]
+  
+  unused:
+    check-exported: false
+  
+  whitespace:
+    multi-if: false
+    multi-func: false
+  
+  misspell:
+    locale: US
+
+issues:
+  exclude-rules:
+    # Exclude some linters from running on tests files
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - errcheck
+        - dupl
+        - gosec
+        - goconst
+    
+    # Exclude linters for generated files
+    - path: ".*\\.gen\\.go"
+      linters:
+        - errcheck
+        - gosec
+        - dupl
+    
+    # Exclude sqlc generated files
+    - path: "server/internal/db/.*\\.go"
+      linters:
+        - stylecheck
+        - revive
+        - gocritic
+    
+    # Allow main and init functions to be complex
+    - text: "cyclomatic complexity"
+      linters:
+        - gocyclo
+      source: "^func (main|init)\\("
+  
+  max-issues-per-linter: 50
+  max-same-issues: 3
+  new: false
+  fix: false
+
+severity:
+  default-severity: warning
+  rules:
+    - linters:
+        - gosec
+        - errcheck
+      severity: error
+    - linters:
+        - govet
+        - staticcheck
+      severity: error

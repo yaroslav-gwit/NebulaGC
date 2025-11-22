@@ -13,17 +13,21 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 	_ "modernc.org/sqlite"
 
+	"nebulagc.io/server/cmd/nebulagc-server/cmd"
 	"nebulagc.io/server/internal/api"
 	"nebulagc.io/server/internal/ha"
+	"nebulagc.io/server/internal/lighthouse"
+	"nebulagc.io/server/internal/logging"
+	"nebulagc.io/server/internal/metrics"
 	"nebulagc.io/server/internal/service"
 )
 
@@ -58,6 +62,13 @@ type Config struct {
 
 	// PublicURL is the externally reachable URL for this instance.
 	PublicURL string
+
+	// Rate limiting configuration
+	RateLimitAuthFailures  int
+	RateLimitAuthBlock     int
+	RateLimitRequests      int
+	RateLimitBundleUploads int
+	RateLimitHealthChecks  int
 }
 
 // parseFlags parses command-line flags and environment variables.
@@ -86,7 +97,14 @@ func parseFlags() *Config {
 		getEnv("NEBULAGC_DISABLE_WRITE_GUARD", "") == "true",
 		"Disable replica write guard (single-instance mode)")
 	flag.StringVar(&config.PublicURL, "public-url", getEnv("NEBULAGC_PUBLIC_URL", ""),
-		"Public URL for this instance (e.g., https://cp1.example.com:8080)")
+		"Public URL for this instance (e.g., https://cp1.example.com)")
+
+	// Rate limiting flags
+	config.RateLimitAuthFailures = getEnvInt("NEBULAGC_RATELIMIT_AUTH_FAILURES_PER_MIN", 10)
+	config.RateLimitAuthBlock = getEnvInt("NEBULAGC_RATELIMIT_AUTH_FAILURES_BLOCK_MIN", 60)
+	config.RateLimitRequests = getEnvInt("NEBULAGC_RATELIMIT_REQUESTS_PER_MIN", 100)
+	config.RateLimitBundleUploads = getEnvInt("NEBULAGC_RATELIMIT_BUNDLE_UPLOADS_PER_MIN", 10)
+	config.RateLimitHealthChecks = getEnvInt("NEBULAGC_RATELIMIT_HEALTH_CHECKS_PER_MIN", 30)
 
 	masterFlag := flag.Bool("master", defaultMaster, "Run in master mode (write-enabled)")
 	replicaFlag := flag.Bool("replica", defaultReplica, "Run in replica mode (read-only)")
@@ -109,6 +127,16 @@ func parseFlags() *Config {
 func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
+	}
+	return defaultValue
+}
+
+// getEnvInt retrieves an integer environment variable with a default value.
+func getEnvInt(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		if intValue, err := strconv.Atoi(value); err == nil {
+			return intValue
+		}
 	}
 	return defaultValue
 }
@@ -151,26 +179,28 @@ func validateConfig(config *Config) error {
 	return nil
 }
 
-// setupLogger creates a Zap logger based on configuration.
+// setupLogger creates a structured logger based on configuration.
 func setupLogger(config *Config) (*zap.Logger, error) {
-	// Parse log level
-	var level zapcore.Level
-	if err := level.UnmarshalText([]byte(config.LogLevel)); err != nil {
-		return nil, fmt.Errorf("invalid log level %q: %w", config.LogLevel, err)
+	// Determine environment from log format
+	var env logging.Environment
+	if config.LogFormat == "json" {
+		env = logging.EnvironmentProduction
+	} else {
+		env = logging.EnvironmentDevelopment
 	}
 
 	// Create logger config
-	var zapConfig zap.Config
-	if config.LogFormat == "json" {
-		zapConfig = zap.NewProductionConfig()
-	} else {
-		zapConfig = zap.NewDevelopmentConfig()
-		zapConfig.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+	logConfig := logging.Config{
+		Level:             config.LogLevel,
+		Environment:       env,
+		OutputPaths:       []string{"stdout"},
+		ErrorOutputPaths:  []string{"stderr"},
+		DisableCaller:     false,
+		DisableStacktrace: false,
 	}
-	zapConfig.Level = zap.NewAtomicLevelAt(level)
 
 	// Build logger
-	logger, err := zapConfig.Build()
+	logger, err := logging.NewLogger(logConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create logger: %w", err)
 	}
@@ -221,6 +251,15 @@ func parseCORSOrigins(origins string) []string {
 }
 
 func main() {
+	// Check for util subcommand first
+	if len(os.Args) > 1 && os.Args[1] == "util" {
+		if err := cmd.ExecuteUtil(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	// Parse configuration
 	config := parseFlags()
 
@@ -237,6 +276,11 @@ func main() {
 		os.Exit(1)
 	}
 	defer logger.Sync()
+
+	// Initialize metrics
+	if err := metrics.Init(); err != nil {
+		logger.Fatal("failed to initialize metrics", zap.Error(err))
+	}
 
 	logger.Info("starting nebulagc-server",
 		zap.String("version", "0.1.0"),
@@ -263,6 +307,14 @@ func main() {
 
 	if err := haManager.Start(); err != nil {
 		logger.Fatal("failed to start HA manager", zap.Error(err))
+	}
+
+	// Initialize lighthouse manager
+	lighthouseConfig := lighthouse.DefaultConfig(config.InstanceID)
+	lighthouseManager := lighthouse.NewManager(lighthouseConfig, db, logger)
+
+	if err := lighthouseManager.Start(); err != nil {
+		logger.Fatal("failed to start lighthouse manager", zap.Error(err))
 	}
 
 	// Setup HTTP router
@@ -302,6 +354,10 @@ func main() {
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Error("server shutdown failed", zap.Error(err))
+	}
+
+	if err := lighthouseManager.Stop(); err != nil {
+		logger.Error("failed to stop lighthouse manager", zap.Error(err))
 	}
 
 	if err := haManager.Stop(); err != nil {
